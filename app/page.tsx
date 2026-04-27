@@ -313,10 +313,19 @@ export default function Home() {
   const [authState, setAuthState] = useState<'loading' | 'unauthenticated' | 'authenticated'>('loading');
   const [errorParam, setErrorParam] = useState<string | null>(null);
 
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const fetchNowPlaying = useCallback(async () => {
     try {
       const res = await fetch('/api/now-playing');
-      if (res.status === 401) { setAuthState('unauthenticated'); return; }
+      if (res.status === 401) {
+        setAuthState('unauthenticated');
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        return;
+      }
       const data = await res.json();
       setAuthState('authenticated');
       setTrack(data.playing ? data.track : null);
@@ -333,8 +342,10 @@ export default function Home() {
       return;
     }
     fetchNowPlaying();
-    const interval = setInterval(fetchNowPlaying, 5000);
-    return () => clearInterval(interval);
+    intervalRef.current = setInterval(fetchNowPlaying, 5000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [fetchNowPlaying]);
 
   if (authState === 'loading')         return <LoadingScreen />;
