@@ -87,6 +87,7 @@ async function generateWithRetry(prompt: string, maxAttempts = 3): Promise<FactR
         config: {
           responseMimeType: 'application/json',
           responseSchema: FACT_SCHEMA,
+          temperature: 0.4,
         },
       });
 
