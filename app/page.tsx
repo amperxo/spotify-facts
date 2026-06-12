@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import dynamic from 'next/dynamic';
 
-// Three.js must not run on the server
+// Canvas 2D visualizer touches window/canvas — must not run on the server
 const AudioVisualizer = dynamic(() => import('@/components/AudioVisualizer'), { ssr: false });
 
 interface Track {
