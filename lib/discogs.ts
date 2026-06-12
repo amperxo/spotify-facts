@@ -42,6 +42,8 @@ interface SearchResult {
   year?: string | number;
   country?: string;
   format?: string[];
+  genre?: string[];
+  style?: string[];
   thumb?: string;
   cover_image?: string;
   community?: { have?: number; want?: number };
@@ -84,7 +86,10 @@ async function searchRelease(
     type: 'release',
     release_title: cleanAlbumTitle(album) || album,
     artist,
-    per_page: '10',
+    // Generic/self-titled albums ("The Beatles" by The Beatles) match many
+    // releases; fetch enough that the most-collected canonical pressing is in
+    // the set we sort by community ownership.
+    per_page: '25',
   });
   const data = (await discogsFetch(`/database/search?${params}`)) as {
     results?: SearchResult[];
@@ -151,4 +156,20 @@ export async function fetchAlbumListings(
     want: match.community?.want ?? 0,
     url: `https://www.discogs.com/sell/release/${match.id}`,
   };
+}
+
+// Discogs orders styles broadest-first, so style[0] is often an umbrella genre
+// ("Indie Rock") rather than the iconic subgenre ("Shoegaze"). Prefer the first
+// style that isn't one of these umbrellas; used to seed the genre-lineage lookup.
+const UMBRELLA_STYLES = new Set([
+  'rock', 'pop', 'indie rock', 'alternative rock', 'electronic', 'hip hop',
+  'folk', 'country', 'jazz', 'blues', 'classical', 'soul', 'funk', 'reggae',
+  'pop rock', 'rock & roll',
+]);
+
+export async function fetchAlbumStyle(album: string, artist: string): Promise<string | null> {
+  const match = await searchRelease(album, artist);
+  const styles = match?.style ?? [];
+  const specific = styles.find((s) => !UMBRELLA_STYLES.has(s.toLowerCase()));
+  return specific ?? styles[0] ?? match?.genre?.[0] ?? null;
 }
