@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { exchangeCodeForTokens } from '@/lib/spotify';
+import { requestOrigin } from '@/lib/origin';
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const origin = requestOrigin(request);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
   const error = searchParams.get('error');

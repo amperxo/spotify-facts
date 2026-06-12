@@ -31,7 +31,7 @@ Create a `.env.local` file in the project root:
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id
-SPOTIFY_REDIRECT_URI=http://localhost:3000/callback
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/callback
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
@@ -42,7 +42,9 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), sign in with Spotify, and play a song.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000), sign in with Spotify, and play a song.
+
+> **Note:** Use `127.0.0.1`, not `localhost` — Spotify no longer accepts `localhost` redirect URIs. The value here must match the Redirect URI registered in your Spotify app exactly.
 
 ## How It Works
 

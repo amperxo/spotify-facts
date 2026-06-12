@@ -1,29 +1,27 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import {
-  fetchCurrentlyPlaying,
-  fetchAudioFeatures,
-  refreshAccessToken,
-  type AudioFeatures,
-} from '@/lib/spotify';
+import { fetchCurrentlyPlaying, refreshAccessToken } from '@/lib/spotify';
+import { fetchTempo } from '@/lib/deezer';
 
-// Audio features don't change — cache them permanently by track ID.
-// Cap at 500 entries to prevent unbounded memory growth.
-const featuresCache = new Map<string, AudioFeatures>();
-const FEATURES_CACHE_MAX = 500;
+// Real BPM rarely changes for a track — cache per track id (0 = looked up, none
+// found). Capped to bound memory like the other in-process caches.
+const tempoCache = new Map<string, number>();
+const TEMPO_CACHE_MAX = 500;
 
 async function getTrack(accessToken: string) {
   const track = await fetchCurrentlyPlaying(accessToken);
   if (!track) return null;
 
-  // Fetch audio features once per track; fall back to defaults on failure.
-  if (!featuresCache.has(track.id)) {
-    const features = await fetchAudioFeatures(track.id, accessToken).catch(() => null);
-    if (featuresCache.size >= FEATURES_CACHE_MAX) featuresCache.delete(featuresCache.keys().next().value!);
-    featuresCache.set(track.id, features ?? { tempo: 120, energy: 0.7 });
+  if (!tempoCache.has(track.id)) {
+    const info = await fetchTempo(track.isrc, track.name, track.artist).catch(() => null);
+    if (tempoCache.size >= TEMPO_CACHE_MAX) tempoCache.delete(tempoCache.keys().next().value!);
+    tempoCache.set(track.id, info?.bpm ?? 0);
   }
-  const { tempo, energy } = featuresCache.get(track.id)!;
-  return { ...track, tempo, energy };
+
+  // Attach a real tempo when we have one; otherwise omit it so the visualizer
+  // falls back to its per-song pseudo-tempo.
+  const bpm = tempoCache.get(track.id)!;
+  return bpm > 0 ? { ...track, tempo: bpm } : track;
 }
 
 export async function GET() {

@@ -101,27 +101,7 @@ export interface SpotifyTrack {
   duration: number;
   progress: number;
   isPlaying: boolean;
-  tempo: number;    // BPM from audio features, default 120 if unavailable
-  energy: number;   // 0–1 from audio features, default 0.7
-}
-
-export interface AudioFeatures {
-  tempo: number;
-  energy: number;
-}
-
-export async function fetchAudioFeatures(
-  trackId: string,
-  accessToken: string
-): Promise<AudioFeatures | null> {
-  const res = await fetch(
-    `https://api.spotify.com/v1/audio-features/${trackId}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (!data?.tempo) return null;
-  return { tempo: data.tempo, energy: data.energy ?? 0.7 };
+  isrc: string | null;   // for matching against other catalogs (e.g. Deezer)
 }
 
 // Returns null when nothing is playing (204 from Spotify).
@@ -151,7 +131,6 @@ export async function fetchCurrentlyPlaying(
     duration: data.item.duration_ms,
     progress: data.progress_ms ?? 0,
     isPlaying: data.is_playing,
-    tempo: 120,   // filled in by now-playing route after audio-features fetch
-    energy: 0.7,
+    isrc: data.item.external_ids?.isrc ?? null,
   };
 }
