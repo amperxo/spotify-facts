@@ -1,290 +1,254 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import Image from 'next/image';
+import { useEffect, useRef, useState } from 'react';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Per-song motion seed ──────────────────────────────────────────────────────
 
-const BAR_COUNT   = 128;
-const TILT        = 0.30;   // vertical compression of the ring (3D tilt illusion)
-const DEPTH_SCALE = 0.35;   // back bars are this much smaller than front bars
-const BASE_W      = 2.6;    // bar stroke width at front
-
-// Particle field
-const PARTICLE_COUNT = 70;
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface Particle {
-  x: number; y: number;
-  vx: number; vy: number;
-  r: number;
-  opacity: number;
-  colorIndex: number;
-}
-
-// ── Frequency simulation ──────────────────────────────────────────────────────
-
-function simulateFreq(time: number, i: number, isPlaying: boolean, bpm: number, energy: number): number {
-  if (!isPlaying) {
-    return 0.025 + Math.sin(time * 0.8 + i * 0.22) * 0.012 + 0.012;
+function hashSeed(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  const t = i / BAR_COUNT;
-
-  // Beat pulse: exponential decay envelope locked to real BPM.
-  // beatPhase 0→1 each beat; exp(-phase*7) = sharp hit at 0, near-zero by 0.5.
-  const beatPhase = (time * (bpm / 60)) % 1;
-  const beat      = Math.exp(-beatPhase * 7) * (0.5 + energy * 0.4);
-
-  const bass    = Math.pow(Math.max(0, Math.sin(time * 1.55 + i * 0.06)), 2.5);
-  const lowMid  = Math.max(0, Math.sin(time * 2.60 + i * 0.22 + 0.90)) * 0.65;
-  const highMid = Math.max(0, Math.sin(time * 4.10 + i * 0.41 + 2.30)) * 0.50;
-  const treble  = Math.max(0, Math.sin(time * 7.30 + i * 0.78 + 4.10)) * 0.38;
-  const bassW   = Math.pow(1 - t, 1.8);
-  const trebleW = Math.pow(t, 1.8);
-  const midW    = 1 - bassW - trebleW;
-  const spectral = bass * bassW + lowMid * midW * 0.6 + highMid * midW * 0.4 + treble * trebleW;
-
-  // Scale overall amplitude by track energy (quiet ballads sit lower)
-  const energyScale = 0.55 + energy * 0.45;
-  return Math.min(1, spectral * energyScale + beat * (1 - t * 0.4));
+  return h >>> 0;
 }
 
-// ── Colour helpers ────────────────────────────────────────────────────────────
-
-function parseColor(color: string): [number, number, number] {
-  const c = document.createElement('canvas');
-  c.width = c.height = 1;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = color;
-  ctx.fillRect(0, 0, 1, 1);
-  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-  return [r, g, b];
+interface CoverLayer {
+  key: string;
+  url: string;
 }
 
-function lerp3(
-  a: [number, number, number],
-  b: [number, number, number],
-  t: number,
-): [number, number, number] {
+// Inverse of a 3×3 matrix (rows). Used to solve the image→triangle affine.
+function inv3(m: number[][]): number[][] {
+  const [a, b, c] = m[0];
+  const [d, e, f] = m[1];
+  const [g, h, i] = m[2];
+  const A = e * i - f * h;
+  const B = -(d * i - f * g);
+  const C = d * h - e * g;
+  const id = 1 / (a * A + b * B + c * C);
   return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
+    [A * id, (c * h - b * i) * id, (b * f - c * e) * id],
+    [B * id, (a * i - c * g) * id, (c * d - a * f) * id],
+    [C * id, (b * g - a * h) * id, (a * e - b * d) * id],
   ];
-}
-
-function rgba(c: [number, number, number], a: number) {
-  return `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function AudioVisualizer({ colors, isPlaying, tempo = 120, energy = 0.7 }: { colors: string[]; isPlaying: boolean; tempo?: number; energy?: number }) {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const stateRef   = useRef({ colors, isPlaying, tempo, energy });
-  const heightsRef = useRef(new Float32Array(BAR_COUNT).fill(0.03));
-  const timeRef    = useRef(0);
-  const rafRef     = useRef<number>(0);
-  const rgbRef     = useRef<[number, number, number][]>([
-    [29, 185, 84], [78, 154, 241], [247, 147, 30],
-  ]);
-  const particlesRef = useRef<Particle[]>([]);
+export default function AudioVisualizer({
+  albumArt,
+  coverSrc,
+  colors,
+  isPlaying,
+  seed,
+}: {
+  albumArt: string | null;
+  coverSrc?: string | null;
+  colors: string[];
+  isPlaying: boolean;
+  seed: string;
+  tempo?: number; // currently unused
+}) {
+  const [layers, setLayers] = useState<CoverLayer[]>([]);
+  useEffect(() => {
+    if (!albumArt) return;
+    setLayers((prev) => {
+      if (prev[prev.length - 1]?.url === albumArt) return prev;
+      return [...prev, { key: `${seed}:${albumArt}`, url: albumArt }].slice(-2);
+    });
+  }, [albumArt, seed]);
 
-  useEffect(() => { stateRef.current = { colors, isPlaying, tempo, energy }; }, [colors, isPlaying, tempo, energy]);
+  const h = hashSeed(seed || 'default');
+  const panX = ((h & 0xff) / 255 - 0.5) * 7;
+  const panY = (((h >> 8) & 0xff) / 255 - 0.5) * 7;
+  const duration = 30 + ((h >> 16) & 0x0f);
+  const rotDir = h & 1 ? 1 : -1;
+
+  const [c1 = '#1DB954', c2 = '#4e9af1'] = colors;
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const fadeRef = useRef(0);
+  const animRef = useRef({ isPlaying, rotDir });
+  useEffect(() => {
+    animRef.current = { isPlaying, rotDir };
+  }, [isPlaying, rotDir]);
 
   useEffect(() => {
-    rgbRef.current = stateRef.current.colors.map(parseColor);
-  }, [colors]);
+    const src = coverSrc ?? albumArt;
+    if (!src) return;
+    const img = new window.Image();
+    img.onload = () => {
+      imgRef.current = img;
+      fadeRef.current = 0;
+    };
+    img.src = `/_next/image?url=${encodeURIComponent(src)}&w=1920&q=75`;
+  }, [coverSrc, albumArt]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const el  = canvas as HTMLCanvasElement;
-    const ctx = el.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let raf = 0;
     let lastTs = 0;
+    let t = 0;
+    let W = 0;
+    let H = 0;
+    let dpr = 1;
 
-    // Initial colour parse
-    rgbRef.current = stateRef.current.colors.map(parseColor);
-
-    // Resize
     function resize() {
-      el.width  = window.innerWidth;
-      el.height = window.innerHeight;
-      // Re-scatter particles on resize
-      particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () => ({
-        x: Math.random() * el.width,
-        y: Math.random() * el.height,
-        vx: (Math.random() - 0.5) * 0.25,
-        vy: (Math.random() - 0.5) * 0.25,
-        r: Math.random() * 1.8 + 0.4,
-        opacity: Math.random() * 0.35 + 0.08,
-        colorIndex: Math.floor(Math.random() * 3),
-      }));
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas!.width = W * dpr;
+      canvas!.height = H * dpr;
+      canvas!.style.width = `${W}px`;
+      canvas!.style.height = `${H}px`;
+      ctx!.imageSmoothingQuality = 'high';
     }
+
+    function frame(ts: number) {
+      raf = requestAnimationFrame(frame);
+      const dt = Math.min((ts - lastTs) / 1000, 0.05);
+      lastTs = ts;
+      const { isPlaying, rotDir } = animRef.current;
+      if (isPlaying) t += dt;
+
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.clearRect(0, 0, W, H);
+
+      const img = imgRef.current;
+      if (!img) return;
+      const fade = Math.min(1, fadeRef.current + dt / 0.8);
+      fadeRef.current = fade;
+
+      // Fundamental triangle in IMAGE space (equilateral), rotating + drifting so
+      // the reflected pattern slowly evolves like a turning kaleidoscope.
+      const iw = img.width;
+      const ih = img.height;
+      const cx = iw / 2 + Math.sin(t * 0.11) * iw * 0.08;
+      const cy = ih / 2 + Math.cos(t * 0.09) * ih * 0.08;
+      const rho = Math.min(iw, ih) * 0.3;
+      const th = t * 0.08 * rotDir;
+      const V = [0, 1, 2].map((k) => {
+        const a = th + (k * 2 * Math.PI) / 3;
+        return [cx + rho * Math.cos(a), cy + rho * Math.sin(a)];
+      });
+      const Sinv = inv3([
+        [V[0][0], V[1][0], V[2][0]],
+        [V[0][1], V[1][1], V[2][1]],
+        [1, 1, 1],
+      ]);
+
+      // Screen triangular lattice. Basis e1=(L,0), e2=(L/2, L·√3/2).
+      const L = Math.min(W, H) * 0.15;
+      const hy = (L * Math.sqrt(3)) / 2;
+      const vpos = (a: number, b: number): [number, number] => [a * L + b * (L / 2), b * hy];
+      const colorOf = (a: number, b: number) => (((a - b) % 3) + 3) % 3;
+
+      // Affine mapping the image (fundamental triangle V) onto screen pts P,
+      // ordered by vertex colour so shared edges map to identical image points.
+      const drawTri = (cells: [number, number][]) => {
+        const pts = cells.map(([a, b]) => vpos(a, b));
+        const minx = Math.min(pts[0][0], pts[1][0], pts[2][0]);
+        const maxx = Math.max(pts[0][0], pts[1][0], pts[2][0]);
+        const miny = Math.min(pts[0][1], pts[1][1], pts[2][1]);
+        const maxy = Math.max(pts[0][1], pts[1][1], pts[2][1]);
+        if (maxx < 0 || minx > W || maxy < 0 || miny > H) return;
+
+        const P: ([number, number] | null)[] = [null, null, null];
+        cells.forEach(([a, b], k) => { P[colorOf(a, b)] = pts[k]; });
+        const P0 = P[0]!, P1 = P[1]!, P2 = P[2]!;
+        const Px = [P0[0], P1[0], P2[0]];
+        const Py = [P0[1], P1[1], P2[1]];
+        const m = (row: number[], col: number) =>
+          row[0] * Sinv[0][col] + row[1] * Sinv[1][col] + row[2] * Sinv[2][col];
+
+        ctx!.save();
+        ctx!.beginPath();
+        ctx!.moveTo(pts[0][0], pts[0][1]);
+        ctx!.lineTo(pts[1][0], pts[1][1]);
+        ctx!.lineTo(pts[2][0], pts[2][1]);
+        ctx!.closePath();
+        ctx!.clip();
+        // image→screen affine, pre-multiplied by dpr for the device buffer
+        ctx!.setTransform(
+          m(Px, 0) * dpr, m(Py, 0) * dpr,
+          m(Px, 1) * dpr, m(Py, 1) * dpr,
+          m(Px, 2) * dpr, m(Py, 2) * dpr,
+        );
+        ctx!.globalAlpha = fade;
+        ctx!.drawImage(img, 0, 0);
+        ctx!.restore();
+      };
+
+      const rows = Math.ceil(H / hy) + 2;
+      const cols = Math.ceil(W / L) + 2;
+      for (let b = -1; b < rows; b++) {
+        for (let a = -Math.ceil(rows / 2) - 1; a < cols; a++) {
+          drawTri([[a, b], [a + 1, b], [a, b + 1]]);        // up triangle
+          drawTri([[a + 1, b], [a + 1, b + 1], [a, b + 1]]); // down triangle
+        }
+      }
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.globalAlpha = 1;
+    }
+
     resize();
     window.addEventListener('resize', resize);
-
-    function draw(ts: number) {
-      rafRef.current = requestAnimationFrame(draw);
-      const delta = Math.min((ts - lastTs) / 1000, 0.05);
-      lastTs = ts;
-      timeRef.current += delta;
-      const T = timeRef.current;
-
-      const { isPlaying, tempo, energy } = stateRef.current;
-      const [c1, c2, c3] = rgbRef.current as [[number,number,number],[number,number,number],[number,number,number]];
-
-      const W  = el.width;
-      const H  = el.height;
-      const cx = W / 2;
-      const cy = H / 2 + H * 0.05;
-      const radius   = Math.min(W, H) * 0.28;
-      const maxBarOut = Math.min(W, H) * 0.26;  // outward bar max
-      const maxBarIn  = Math.min(W, H) * 0.16;  // inward bar max
-
-      // ── Background fill ───────────────────────────────────────────────────
-      ctx.fillStyle = '#080808';
-      ctx.fillRect(0, 0, W, H);
-
-      // ── Aurora: 3 large soft glows using album colours ────────────────────
-      const auroraPositions = [
-        { x: W * 0.15, y: H * 0.20, c: c1 },
-        { x: W * 0.85, y: H * 0.75, c: c2 },
-        { x: W * 0.70, y: H * 0.15, c: c3 },
-      ];
-      const auroraR = Math.max(W, H) * 0.55;
-
-      for (const { x, y, c } of auroraPositions) {
-        // Slow drift
-        const dx = Math.sin(T * 0.15 + x) * W * 0.04;
-        const dy = Math.cos(T * 0.12 + y) * H * 0.04;
-        const grad = ctx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, auroraR);
-        grad.addColorStop(0,   rgba(c, 0.13));
-        grad.addColorStop(0.4, rgba(c, 0.06));
-        grad.addColorStop(1,   rgba(c, 0));
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, W, H);
-      }
-
-      // ── Particles ─────────────────────────────────────────────────────────
-      // Beat pulse synced to real BPM — same envelope as simulateFreq
-      const beatPhase = (T * (tempo / 60)) % 1;
-      const beatPulse = Math.exp(-beatPhase * 7) * (0.5 + energy * 0.4);
-      for (const p of particlesRef.current) {
-        p.x += p.vx;
-        p.y += p.vy;
-        // Wrap around
-        if (p.x < 0) p.x = W;
-        if (p.x > W) p.x = 0;
-        if (p.y < 0) p.y = H;
-        if (p.y > H) p.y = 0;
-
-        const pc = [c1, c2, c3][p.colorIndex] ?? c1;
-        const pulseOpacity = p.opacity + beatPulse * 0.15;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r + beatPulse * 0.6, 0, Math.PI * 2);
-        ctx.fillStyle = rgba(pc, pulseOpacity);
-        ctx.fill();
-      }
-
-      // ── Build & sort bars ─────────────────────────────────────────────────
-      const bars: { angle: number; depth: number; h: number }[] = [];
-      for (let i = 0; i < BAR_COUNT; i++) {
-        const angle  = (i / BAR_COUNT) * Math.PI * 2 - Math.PI / 2;
-        const target = simulateFreq(T, i, isPlaying, tempo, energy);
-        const speed  = isPlaying ? 0.14 : 0.04;
-        heightsRef.current[i] += (target - heightsRef.current[i]) * speed;
-        const depth = Math.sin(angle); // -1 front, +1 back
-        bars.push({ angle, depth, h: heightsRef.current[i] });
-      }
-      bars.sort((a, b) => b.depth - a.depth); // painter's order
-
-      for (const { angle, depth, h } of bars) {
-        const df  = 1 - (depth + 1) * 0.5 * DEPTH_SCALE; // 1.0 front → 0.65 back
-        const dim = 0.5 + df * 0.5;
-
-        // Bar base on the ring
-        const bx = cx + radius * Math.cos(angle);
-        const by = cy + radius * Math.sin(angle) * TILT;
-
-        // Outward tip (grows away from centre)
-        const outH = h * maxBarOut * df;
-        // Direction unit vector pointing away from centre (in tilted space)
-        const dirX = Math.cos(angle);
-        const dirY = Math.sin(angle) * TILT;
-        const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
-        const tipOutX = bx + (dirX / dirLen) * outH;
-        const tipOutY = by + (dirY / dirLen) * outH - outH * (1 - TILT) * 0.5;
-
-        // Inward tip (grows toward centre, shorter)
-        const inH = h * maxBarIn * df;
-        const tipInX = bx - (dirX / dirLen) * inH;
-        const tipInY = by - (dirY / dirLen) * inH + inH * (1 - TILT) * 0.5;
-
-        // Colour by height
-        const tf   = Math.min(h, 1);
-        const cTip = tf < 0.5 ? lerp3(c1, c2, tf * 2) : lerp3(c2, c3, (tf - 0.5) * 2);
-        const cBase: [number, number, number] = lerp3(c1, [20, 20, 20], 0.4);
-
-        const w = BASE_W * df;
-
-        function drawBar(x1: number, y1: number, x2: number, y2: number, glow: boolean) {
-          if (glow && h > 0.3 && isPlaying) {
-            ctx.save();
-            ctx.shadowColor = rgba(cTip, 0.9);
-            ctx.shadowBlur  = 12 * h * df;
-            ctx.strokeStyle = rgba(cTip, 0.4 * dim);
-            ctx.lineWidth   = w + 4;
-            ctx.lineCap     = 'round';
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          if (Math.abs(y2 - y1) < 0.5 && Math.abs(x2 - x1) < 0.5) return;
-
-          const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-          grad.addColorStop(0, rgba(cBase, 0.7 * dim));
-          grad.addColorStop(1, rgba(cTip,  0.95 * dim));
-
-          ctx.save();
-          ctx.strokeStyle = grad;
-          ctx.lineWidth   = w;
-          ctx.lineCap     = 'round';
-          ctx.globalAlpha = dim;
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        drawBar(bx, by, tipOutX, tipOutY, true);
-        drawBar(bx, by, tipInX,  tipInY,  false);
-      }
-
-      // ── Centre glow ───────────────────────────────────────────────────────
-      const pulseR  = radius * (0.04 + beatPulse * 0.025);
-      const dotGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, pulseR * 3);
-      dotGrad.addColorStop(0,   rgba(c1, 0.85));
-      dotGrad.addColorStop(0.4, rgba(c1, 0.25));
-      dotGrad.addColorStop(1,   rgba(c1, 0));
-      ctx.beginPath();
-      ctx.arc(cx, cy, pulseR * 3, 0, Math.PI * 2);
-      ctx.fillStyle = dotGrad;
-      ctx.fill();
-    }
-
-    rafRef.current = requestAnimationFrame(draw);
+    raf = requestAnimationFrame(frame);
     return () => {
-      cancelAnimationFrame(rafRef.current);
+      cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
     };
   }, []);
 
   return (
-    <canvas ref={canvasRef} className="fixed inset-0 -z-10" />
+    <div className="fixed inset-0 -z-10 overflow-hidden bg-[#080808]">
+      {layers.map((layer) => (
+        <div
+          key={layer.key}
+          className="absolute inset-0"
+          style={{ animation: 'ambient-fade 1.2s ease-out forwards' }}
+        >
+          <div
+            className="absolute inset-0"
+            style={{
+              animation: `ambient-pan ${duration}s ease-in-out infinite alternate`,
+              animationPlayState: isPlaying ? 'running' : 'paused',
+              ['--pan-x' as string]: `${panX}%`,
+              ['--pan-y' as string]: `${panY}%`,
+            }}
+          >
+            <Image src={layer.url} alt="" fill sizes="100vw" className="object-cover blur-3xl scale-110" />
+          </div>
+        </div>
+      ))}
+
+      {/* Seamless triangular (p6m) kaleidoscope */}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 pointer-events-none"
+        style={{ filter: 'saturate(1.2) contrast(1.06)' }}
+      />
+
+      <div
+        className="absolute inset-0 mix-blend-soft-light opacity-40"
+        style={{ background: `radial-gradient(70% 60% at 50% 50%, ${c1}, ${c2} 60%, transparent 80%)` }}
+      />
+      <div className="absolute inset-0 bg-black/45" />
+      <div
+        className="absolute inset-0"
+        style={{ background: 'radial-gradient(120% 100% at 50% 45%, transparent 0%, rgba(0,0,0,0.62) 100%)' }}
+      />
+      <div
+        className="absolute inset-0 bg-black transition-opacity duration-700"
+        style={{ opacity: isPlaying ? 0 : 0.25 }}
+      />
+    </div>
   );
 }
