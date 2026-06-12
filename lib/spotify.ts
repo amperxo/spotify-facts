@@ -101,7 +101,6 @@ export interface SpotifyTrack {
   duration: number;
   progress: number;
   isPlaying: boolean;
-  isrc: string | null;   // for matching against other catalogs (e.g. Deezer)
 }
 
 // Returns null when nothing is playing (204 from Spotify).
@@ -131,6 +130,5 @@ export async function fetchCurrentlyPlaying(
     duration: data.item.duration_ms,
     progress: data.progress_ms ?? 0,
     isPlaying: data.is_playing,
-    isrc: data.item.external_ids?.isrc ?? null,
   };
 }
