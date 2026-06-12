@@ -40,12 +40,14 @@ function inv3(m: number[][]): number[][] {
 export default function AudioVisualizer({
   albumArt,
   coverSrc,
+  coverReady,
   colors,
   isPlaying,
   seed,
 }: {
   albumArt: string | null;
   coverSrc?: string | null;
+  coverReady?: boolean; // hi-res lookup finished — build the kaleidoscope once, no mid-song swap
   colors: string[];
   isPlaying: boolean;
   seed: string;
@@ -76,15 +78,22 @@ export default function AudioVisualizer({
   }, [isPlaying, rotDir]);
 
   useEffect(() => {
+    // Blank the kaleidoscope (backdrop shows) until the FINAL source is decided,
+    // so we never render the Spotify cover and then swap to a different Apple one.
+    imgRef.current = null;
+    if (coverReady === false) return;
     const src = coverSrc ?? albumArt;
     if (!src) return;
+    let cancelled = false;
     const img = new window.Image();
     img.onload = () => {
+      if (cancelled) return; // a newer track/source superseded this load
       imgRef.current = img;
       fadeRef.current = 0;
     };
     img.src = `/_next/image?url=${encodeURIComponent(src)}&w=1920&q=75`;
-  }, [coverSrc, albumArt]);
+    return () => { cancelled = true; };
+  }, [coverReady, coverSrc, albumArt]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
