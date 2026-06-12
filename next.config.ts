@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: 'i.scdn.co',
       },
+      {
+        protocol: 'https',
+        hostname: 'i.discogs.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.mzstatic.com',
+      },
     ],
   },
 };
