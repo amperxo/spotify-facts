@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import dynamic from 'next/dynamic';
 
-// Canvas 2D visualizer touches window/canvas — must not run on the server
+// Album-art ambient background; client-only (manages crossfade layers in state)
 const AudioVisualizer = dynamic(() => import('@/components/AudioVisualizer'), { ssr: false });
 
 interface Track {
@@ -16,14 +16,28 @@ interface Track {
   duration: number;
   progress: number;
   isPlaying: boolean;
-  tempo: number;
-  energy: number;
+  tempo?: number;
 }
 
 interface FactResult {
   fact: string;
   source: 'Wikipedia' | 'none';
   confidence: 'high' | 'medium' | 'low';
+}
+
+interface AlbumListings {
+  releaseId: number;
+  title: string;
+  year: number | null;
+  coverImage: string | null;
+  format: string | null;
+  country: string | null;
+  numForSale: number;
+  lowestPrice: number | null;
+  currency: string;
+  have: number;
+  want: number;
+  url: string;
 }
 
 function formatMs(ms: number): string {
@@ -145,36 +159,66 @@ function NothingPlaying() {
   );
 }
 
-function FactCard({ fact, status }: { fact: FactResult | null; status: 'loading' | 'ready' | 'error' }) {
+// Inline fact content (no panel — it lives inside the unified card).
+function FactBody({ fact, status }: { fact: FactResult | null; status: 'loading' | 'ready' | 'error' }) {
   if (status === 'loading') {
     return (
-      <div className="rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 px-5 py-4">
-        <div className="flex items-center gap-2 text-white/40 text-sm">
-          <div className="w-3.5 h-3.5 rounded-full border border-white/30 border-t-white/70 animate-spin shrink-0" />
-          Looking up something interesting…
-        </div>
+      <div className="flex items-center gap-2 text-white/40 text-sm">
+        <div className="w-3.5 h-3.5 rounded-full border border-white/30 border-t-white/70 animate-spin shrink-0" />
+        Looking up something interesting…
       </div>
     );
   }
   if (status === 'error') {
-    return (
-      <div className="rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 px-5 py-4">
-        <p className="text-white/30 text-sm">Couldn&apos;t load a fact this time.</p>
-      </div>
-    );
+    return <p className="text-white/30 text-sm">Couldn&apos;t load a fact this time.</p>;
   }
   if (!fact || fact.confidence === 'low' || !fact.fact) {
-    return (
-      <div className="rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 px-5 py-4">
-        <p className="text-white/30 text-sm italic">No fun fact for this one.</p>
-      </div>
-    );
+    return <p className="text-white/30 text-sm italic">No fun fact for this one.</p>;
   }
   return (
-    <div className="rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 px-5 py-4 space-y-3">
+    <div className="space-y-2">
       <p className="text-sm text-white/90 leading-relaxed">{fact.fact}</p>
       <p className="text-xs text-white/30">via {fact.source}</p>
     </div>
+  );
+}
+
+// Inline Discogs row (no panel — it lives inside the unified card).
+function AlbumListingsRow({ listings }: { listings: AlbumListings }) {
+  const price =
+    listings.lowestPrice != null
+      ? new Intl.NumberFormat(undefined, { style: 'currency', currency: listings.currency }).format(listings.lowestPrice)
+      : null;
+
+  const meta = [listings.format, listings.country, listings.year ? String(listings.year) : null]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <a
+      href={listings.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group flex items-center gap-3 -mx-2 px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors"
+    >
+      {listings.coverImage && (
+        <div className="w-11 h-11 rounded-md overflow-hidden bg-white/5 ring-1 ring-white/10 shrink-0">
+          <Image src={listings.coverImage} alt="" width={44} height={44} className="w-full h-full object-cover" />
+        </div>
+      )}
+
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-white/40 truncate">On Discogs{meta ? ` · ${meta}` : ''}</p>
+        <p className="text-sm text-white/80">
+          {price && <span className="text-white font-medium">{price}</span>}
+          {price && ' · '}
+          {listings.numForSale} for sale
+          {listings.want > 0 && <span className="text-white/40"> · {listings.want.toLocaleString()} want</span>}
+        </p>
+      </div>
+
+      <span className="text-white/30 group-hover:text-white/60 transition-colors shrink-0">→</span>
+    </a>
   );
 }
 
@@ -183,7 +227,11 @@ function PlayerCard({ track }: { track: Track }) {
   const [fact, setFact]         = useState<FactResult | null>(null);
   const [factStatus, setFactStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [bgColors, setBgColors] = useState(['#1DB954', '#4e9af1', '#f7931e']);
+  const [listings, setListings] = useState<AlbumListings | null>(null);
+  const [hiResCover, setHiResCover] = useState<string | null>(null);
   const lastFetchedId = useRef<string | null>(null);
+  const lastFetchedAlbum = useRef<string | null>(null);
+  const lastCoverAlbum = useRef<string | null>(null);
 
   // Sync progress on poll
   useEffect(() => { setLocalProgress(track.progress); }, [track.id, track.progress]);
@@ -215,60 +263,98 @@ function PlayerCard({ track }: { track: Track }) {
     const params = new URLSearchParams({ trackId: track.id, track: track.name, artist: track.artist });
     fetch(`/api/fact?${params}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-      .then((d: FactResult) => { setFact(d); setFactStatus('ready'); })
-      .catch(() => setFactStatus('error'));
+      // Ignore a stale response if the user skipped to another track meanwhile.
+      .then((d: FactResult) => { if (lastFetchedId.current === track.id) { setFact(d); setFactStatus('ready'); } })
+      .catch(() => { if (lastFetchedId.current === track.id) setFactStatus('error'); });
   }, [track.id, track.name, track.artist]);
+
+  // Fetch Discogs listings once per album (many tracks share one album)
+  useEffect(() => {
+    if (!track.album) return;
+    if (lastFetchedAlbum.current === track.album) return;
+    lastFetchedAlbum.current = track.album;
+    setListings(null);
+    const params = new URLSearchParams({ album: track.album, artist: track.artist });
+    fetch(`/api/album?${params}`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      // Ignore a stale response if the user skipped to another album meanwhile.
+      .then((d: { listings: AlbumListings | null }) => { if (lastFetchedAlbum.current === track.album) setListings(d.listings); })
+      .catch(() => { if (lastFetchedAlbum.current === track.album) setListings(null); });
+  }, [track.album, track.artist]);
+
+  // Fetch a high-res cover (Apple) once per album for a sharper visualizer.
+  useEffect(() => {
+    if (!track.album) return;
+    if (lastCoverAlbum.current === track.album) return;
+    lastCoverAlbum.current = track.album;
+    setHiResCover(null);
+    const params = new URLSearchParams({ album: track.album, artist: track.artist });
+    fetch(`/api/cover?${params}`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then((d: { url: string | null }) => { if (lastCoverAlbum.current === track.album) setHiResCover(d.url); })
+      .catch(() => { if (lastCoverAlbum.current === track.album) setHiResCover(null); });
+  }, [track.album, track.artist]);
 
   const progressPct = Math.min((localProgress / track.duration) * 100, 100);
 
   return (
     <>
-      <AudioVisualizer colors={bgColors} isPlaying={track.isPlaying} tempo={track.tempo} energy={track.energy} />
+      <AudioVisualizer albumArt={track.albumArt} coverSrc={hiResCover ?? track.albumArt} colors={bgColors} isPlaying={track.isPlaying} seed={track.id} tempo={track.tempo} />
 
-      <main className="flex items-center justify-center min-h-screen px-6 py-12">
-        <div className="flex flex-col md:flex-row items-center md:items-start gap-8 w-full max-w-3xl">
+      <main className="flex items-center justify-center min-h-screen px-4 py-12">
+        <div className="w-full max-w-2xl rounded-3xl bg-black/40 backdrop-blur-xl border border-white/10 ring-1 ring-white/10 shadow-2xl p-7 md:p-9">
 
-          {/* Left: player card */}
-          <div className="w-full max-w-sm shrink-0">
-            <div className="w-full aspect-square rounded-2xl overflow-hidden bg-white/5 mb-6 shadow-2xl ring-1 ring-white/10">
+          {/* Header: album art + track meta + progress */}
+          <div className="flex gap-6">
+            <div className="w-32 h-32 md:w-48 md:h-48 shrink-0 rounded-xl overflow-hidden bg-white/5 ring-1 ring-white/10 shadow-lg">
               {track.albumArt ? (
-                <Image src={track.albumArt} alt={`${track.album} cover`} width={500} height={500}
+                <Image src={track.albumArt} alt={`${track.album} cover`} width={400} height={400}
                   className="w-full h-full object-cover" priority />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <SpotifyIcon className="w-16 h-16 text-white/10" />
+                  <SpotifyIcon className="w-14 h-14 text-white/10" />
                 </div>
               )}
             </div>
 
-            <div className="flex items-start justify-between mb-5">
-              <div className="min-w-0 flex-1 pr-3">
-                <h2 className="text-xl font-bold truncate">{track.name}</h2>
-                <p className="text-white/60 text-sm truncate mt-0.5">{track.artist}</p>
+            <div className="min-w-0 flex-1 flex flex-col">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-2xl md:text-3xl font-bold truncate leading-tight">{track.name}</h2>
+                  <p className="text-white/60 text-sm md:text-base truncate mt-1">{track.artist}</p>
+                </div>
+                <PlayingIndicator isPlaying={track.isPlaying} />
               </div>
-              <PlayingIndicator isPlaying={track.isPlaying} />
-            </div>
 
-            <div className="space-y-2">
-              <div className="h-1 bg-white/10 rounded-full overflow-hidden">
-                <div className="h-full bg-white rounded-full" style={{ width: `${progressPct}%` }} />
+              <div className="mt-auto pt-4 space-y-2">
+                <div className="h-1 bg-white/15 rounded-full overflow-hidden">
+                  <div className="h-full bg-white rounded-full" style={{ width: `${progressPct}%` }} />
+                </div>
+                <div className="flex justify-between text-xs text-white/40 tabular-nums">
+                  <span>{formatMs(localProgress)}</span>
+                  <span>{formatMs(track.duration)}</span>
+                </div>
               </div>
-              <div className="flex justify-between text-xs text-white/40 tabular-nums">
-                <span>{formatMs(localProgress)}</span>
-                <span>{formatMs(track.duration)}</span>
-              </div>
-            </div>
-
-            <div className="mt-8 text-center">
-              <a href="/api/auth/logout" className="text-xs text-white/20 hover:text-white/40 transition-colors">
-                Sign out
-              </a>
             </div>
           </div>
 
-          {/* Right: fact */}
-          <div className="w-full md:flex-1 md:pt-2">
-            <FactCard fact={fact} status={factStatus} />
+          {/* Fact */}
+          <div className="h-px bg-white/10 my-5" />
+          <FactBody fact={fact} status={factStatus} />
+
+          {/* Discogs */}
+          {listings && (
+            <>
+              <div className="h-px bg-white/10 my-4" />
+              <AlbumListingsRow listings={listings} />
+            </>
+          )}
+
+          {/* Footer */}
+          <div className="mt-5 text-right">
+            <a href="/api/auth/logout" className="text-xs text-white/20 hover:text-white/40 transition-colors">
+              Sign out
+            </a>
           </div>
 
         </div>
