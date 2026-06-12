@@ -39,6 +39,17 @@ interface AlbumListings {
   url: string;
 }
 
+interface GenreNode {
+  name: string;
+  year: string | null;
+}
+
+interface GenreTree {
+  current: GenreNode;
+  parents: GenreNode[];
+  grandparents: GenreNode[];
+}
+
 function formatMs(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -221,6 +232,35 @@ function AlbumListingsRow({ listings }: { listings: AlbumListings }) {
   );
 }
 
+function GenreRow({ label, nodes, accent }: { label: string; nodes: GenreNode[]; accent?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-3 py-1">
+      <span className="text-[10px] uppercase tracking-wider text-white/30 w-14 shrink-0 pt-0.5">{label}</span>
+      <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        {nodes.map((n) => (
+          <span key={n.name} className="whitespace-nowrap">
+            <span className={accent ? 'text-white font-semibold' : 'text-sm text-white/80'}>{n.name}</span>
+            {n.year && <span className="text-[10px] text-white/35"> {n.year}</span>}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GenreLineage({ tree }: { tree: GenreTree }) {
+  return (
+    <div>
+      <p className="text-xs text-white/40 mb-2">Genre lineage</p>
+      <div className="space-y-0.5">
+        {tree.grandparents.length > 0 && <GenreRow label="Roots" nodes={tree.grandparents} />}
+        <GenreRow label="Origins" nodes={tree.parents} />
+        <GenreRow label="Now" nodes={[tree.current]} accent />
+      </div>
+    </div>
+  );
+}
+
 function PlayerCard({ track }: { track: Track }) {
   const [localProgress, setLocalProgress] = useState(track.progress);
   const [fact, setFact]         = useState<FactResult | null>(null);
@@ -228,9 +268,12 @@ function PlayerCard({ track }: { track: Track }) {
   const [bgColors, setBgColors] = useState(['#1DB954', '#4e9af1', '#f7931e']);
   const [listings, setListings] = useState<AlbumListings | null>(null);
   const [hiResCover, setHiResCover] = useState<string | null>(null);
+  const [coverReady, setCoverReady] = useState(false);
+  const [genreTree, setGenreTree] = useState<GenreTree | null>(null);
   const lastFetchedId = useRef<string | null>(null);
   const lastFetchedAlbum = useRef<string | null>(null);
   const lastCoverAlbum = useRef<string | null>(null);
+  const lastGenreAlbum = useRef<string | null>(null);
 
   // Sync progress on poll
   useEffect(() => { setLocalProgress(track.progress); }, [track.id, track.progress]);
@@ -287,18 +330,32 @@ function PlayerCard({ track }: { track: Track }) {
     if (lastCoverAlbum.current === track.album) return;
     lastCoverAlbum.current = track.album;
     setHiResCover(null);
+    setCoverReady(false);
     const params = new URLSearchParams({ album: track.album, artist: track.artist });
     fetch(`/api/cover?${params}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-      .then((d: { url: string | null }) => { if (lastCoverAlbum.current === track.album) setHiResCover(d.url); })
-      .catch(() => { if (lastCoverAlbum.current === track.album) setHiResCover(null); });
+      .then((d: { url: string | null }) => { if (lastCoverAlbum.current === track.album) { setHiResCover(d.url); setCoverReady(true); } })
+      .catch(() => { if (lastCoverAlbum.current === track.album) { setHiResCover(null); setCoverReady(true); } });
+  }, [track.album, track.artist]);
+
+  // Fetch the genre lineage once per album (Discogs style → Wikipedia origins).
+  useEffect(() => {
+    if (!track.album) return;
+    if (lastGenreAlbum.current === track.album) return;
+    lastGenreAlbum.current = track.album;
+    setGenreTree(null);
+    const params = new URLSearchParams({ album: track.album, artist: track.artist });
+    fetch(`/api/genre-tree?${params}`)
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then((d: { tree: GenreTree | null }) => { if (lastGenreAlbum.current === track.album) setGenreTree(d.tree); })
+      .catch(() => { if (lastGenreAlbum.current === track.album) setGenreTree(null); });
   }, [track.album, track.artist]);
 
   const progressPct = Math.min((localProgress / track.duration) * 100, 100);
 
   return (
     <>
-      <AudioVisualizer albumArt={track.albumArt} coverSrc={hiResCover ?? track.albumArt} colors={bgColors} isPlaying={track.isPlaying} seed={track.id} />
+      <AudioVisualizer albumArt={track.albumArt} coverSrc={hiResCover ?? track.albumArt} coverReady={coverReady} colors={bgColors} isPlaying={track.isPlaying} seed={track.id} />
 
       <main className="flex items-center justify-center min-h-screen px-4 py-12">
         <div className="w-full max-w-2xl rounded-3xl bg-black/40 backdrop-blur-xl border border-white/10 ring-1 ring-white/10 shadow-2xl p-7 md:p-9">
@@ -346,6 +403,14 @@ function PlayerCard({ track }: { track: Track }) {
             <>
               <div className="h-px bg-white/10 my-4" />
               <AlbumListingsRow listings={listings} />
+            </>
+          )}
+
+          {/* Genre lineage */}
+          {genreTree && genreTree.parents.length > 0 && (
+            <>
+              <div className="h-px bg-white/10 my-4" />
+              <GenreLineage tree={genreTree} />
             </>
           )}
 
