@@ -49,7 +49,6 @@ export default function AudioVisualizer({
   colors: string[];
   isPlaying: boolean;
   seed: string;
-  tempo?: number; // currently unused
 }) {
   const [layers, setLayers] = useState<CoverLayer[]>([]);
   useEffect(() => {

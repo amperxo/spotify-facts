@@ -16,7 +16,6 @@ interface Track {
   duration: number;
   progress: number;
   isPlaying: boolean;
-  tempo?: number;
 }
 
 interface FactResult {
@@ -299,7 +298,7 @@ function PlayerCard({ track }: { track: Track }) {
 
   return (
     <>
-      <AudioVisualizer albumArt={track.albumArt} coverSrc={hiResCover ?? track.albumArt} colors={bgColors} isPlaying={track.isPlaying} seed={track.id} tempo={track.tempo} />
+      <AudioVisualizer albumArt={track.albumArt} coverSrc={hiResCover ?? track.albumArt} colors={bgColors} isPlaying={track.isPlaying} seed={track.id} />
 
       <main className="flex items-center justify-center min-h-screen px-4 py-12">
         <div className="w-full max-w-2xl rounded-3xl bg-black/40 backdrop-blur-xl border border-white/10 ring-1 ring-white/10 shadow-2xl p-7 md:p-9">
