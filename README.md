@@ -8,6 +8,7 @@ A real-time now-playing app that shows what you're listening to on Spotify and s
 - **AI-Powered Facts** — Generates fun, surprising facts about each song using Wikipedia, MusicBrainz, and Google Gemini
 - **Album-Art Kaleidoscope** — A full-screen, seamless triangular kaleidoscope generated live from the current album's artwork (fetched in high resolution from Apple), slowly turning behind the player
 - **Vinyl Listings** — Surfaces Discogs marketplace stats for the album — copies for sale, lowest price, and collector demand
+- **Genre Lineage** — Traces the album's genre back through its stylistic origins (Discogs style → Wikipedia), showing a roots → origins → now family tree with decades
 - **Secure Auth** — Spotify OAuth with PKCE flow (no client secret exposed to the browser)
 
 ## Tech Stack
@@ -53,6 +54,6 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000), sign in with Spotify, and p
 
 1. User signs in via Spotify OAuth (PKCE)
 2. The app polls the Spotify API every 5 seconds for the currently playing track
-3. When a new track is detected, it fetches context from Wikipedia and MusicBrainz (and Discogs listings for the album)
+3. When a new track is detected, it fetches context from Wikipedia and MusicBrainz (and, per album, Discogs listings plus a Wikipedia-derived genre lineage)
 4. Gemini synthesizes a concise, interesting fact from the gathered sources
 5. The background renders a live, seamless kaleidoscope from the album artwork (fetched in high resolution from Apple)
