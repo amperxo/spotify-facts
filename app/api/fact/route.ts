@@ -46,11 +46,9 @@ export async function GET(request: NextRequest) {
   try {
     result = await generateFact(trackName, artistName, sources, mb);
   } catch (err) {
-    const msg = String(err);
-    const isOverloaded = msg.includes('503') || msg.includes('UNAVAILABLE');
-    console.error('generateFact failed:', msg);
+    console.error('generateFact failed:', String(err));
     return NextResponse.json(
-      { fact: '', source: 'none', confidence: 'low', _error: isOverloaded ? 'overloaded' : 'error' },
+      { fact: '', source: 'none', confidence: 'low' },
       { status: 200 },
     );
   }
