@@ -50,6 +50,8 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000), sign in with Spotify, and p
 
 > **Note:** Use `127.0.0.1`, not `localhost` — Spotify no longer accepts `localhost` redirect URIs. The value here must match the Redirect URI registered in your Spotify app exactly.
 
+> **Spotify access:** This app runs in Spotify's **development mode**, which is capped at 5 users (each of whom must have a Spotify Premium account). Spotify only grants the extended-quota access that lifts this cap to organizations, not individual developers — so to let someone sign in, add their Spotify account email under **Users and Access** in your app's dashboard. Anyone not on that allowlist gets a 403 at sign-in.
+
 ## How It Works
 
 1. User signs in via Spotify OAuth (PKCE)
